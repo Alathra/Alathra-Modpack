@@ -1,0 +1,152 @@
+name: Create Release
+
+on:
+  push:
+    branches:
+      - 'main'
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  discussions: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Create Release
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    if: github.ref_type == 'tag'
+    steps:
+      # Checkout repository and include git LFS files
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          lfs: true
+
+      # Download files from Git LFS and caches them to reduce bandwidth usage
+      - name: Cache and pull LFS files
+        uses: ./.github/actions/lfs
+
+      # Install PackWiz
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '>=1.19'
+
+      - name: Install packwiz
+        run: go install github.com/packwiz/packwiz@latest
+
+      # Update version fields in modpack configs
+      - name: Update version field in configs
+        uses: ./.github/actions/config
+        with:
+          version: ${{ github.ref_name }}
+
+      # Refresh packwiz files (Client)
+      - name: Refresh Packwiz Index Client 
+        shell: bash
+        run: |
+          packwiz refresh
+        working-directory: ./main
+
+      # Commit and push updated files
+      - name: Update repository
+        uses: stefanzweifel/git-auto-commit-action@v6
+        with:
+          commit_message: ${{ github.ref_name }}
+          branch: main
+
+      # Package release (Client)
+      - name: Build CurseForge Client Modpack
+        shell: bash
+        run: |
+          packwiz curseforge export --output AlathraPlus-${{ github.ref_name }}.zip
+        working-directory: ./main
+
+      - name: Build Modrinth Client Modpack
+        shell: bash
+        run: |
+          packwiz modrinth export --output AlathraPlus-${{ github.ref_name }}.mrpack
+        working-directory: ./main
+
+      # Upload artifacts of release files
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Modpack-Release
+          path: |
+            ./main/AlathraPlus-${{ github.ref_name }}.zip
+            ./main/AlathraPlus-${{ github.ref_name }}.mrpack
+          retention-days: 1
+
+      # Fetch modpack metadata from the modpack config
+      - name: Read Modpack Metadata
+        id: metadata
+        uses: ./.github/actions/meta
+        with:
+          working-directory: ./main
+
+      # Generate changelog
+      - name: Generate changelog
+        uses: ardalanamini/auto-changelog@v4
+        id: changelog
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          commit-types: |
+            feat: New Features
+            remove: Removed Features
+            fix: Bug Fixes
+            build: Build System & Dependencies
+            perf: Performance Improvements
+            docs: Documentation
+            test: Tests
+            refactor: Refactors
+            chore: Chores
+            ci: CI
+            style: Code Style
+            revert: Reverts
+          default-commit-type: Other Changes
+          release-name: ${{ github.ref_name }}
+          mention-authors: true
+          mention-new-contributors: true
+          include-compare-link: false
+          include-pr-links: true
+          include-commit-links: true
+          semver: true
+          use-github-autolink: false
+
+      # Create release
+      - name: Create Release Client (GitHub)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./main/AlathraPlus-${{ github.ref_name }}.zip
+            ./main/AlathraPlus-${{ github.ref_name }}.mrpack
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generate_release_notes: false
+          body: ${{ steps.changelog.outputs.changelog }}
+
+      - name: Create Release Client (Modrinth & CurseForge)
+        uses: ./.github/actions/release
+        with:
+          working-directory: ./main
+          version: ${{ github.ref_name }}
+          mod-loader: ${{ steps.metadata.outputs.mod-loader }}
+          minecraft-version: ${{ steps.metadata.outputs.minecraft-version }}
+          modrinth: true
+          curseforge: true
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_ID: ${{ secrets.MODRINTH_ID }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+          CURSEFORGE_ID: ${{ secrets.CURSEFORGE_ID }}
+          changelog: ${{ steps.changelog.outputs.changelog }}

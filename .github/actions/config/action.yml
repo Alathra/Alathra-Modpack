@@ -1,0 +1,17 @@
+name: 'Update config version fields'
+description: 'Sets the version fields in all relevant modpack config files'
+
+inputs:
+  version:
+    description: 'Modpack version'
+    required: true
+    default: '1.0.0'
+
+runs:
+  using: 'composite'
+  steps:
+    # Update version fields for client pack
+    - name: Update client versions
+      shell: bash
+      run: |
+        sed -i -b 's/^version = .*/version = "${{ inputs.version }}"/' ./main/pack.toml
